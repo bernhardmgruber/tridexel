@@ -119,6 +119,74 @@ namespace {
 		}
 	};
 
+	constexpr auto edgeIndexOffsets = std::array<uvec3, 12>{ {
+		{0, 0, 0},
+		{0, 1, 0},
+		{0, 0, 1},
+		{0, 1, 1},
+		{0, 0, 0},
+		{1, 0, 0},
+		{0, 0, 1},
+		{1, 0, 1},
+		{0, 0, 0},
+		{1, 0, 0},
+		{0, 1, 0},
+		{1, 1, 0}
+	}};
+
+	auto gridToDepth(unsigned int coord, unsigned int axis, uvec3 res, BoundingBox box) -> float {
+		return (coord / (float)(res[axis] - 1)) * (box.upper[axis] - box.lower[axis]) + box.lower[axis];
+	}
+
+	auto depthToGrid(float depth, unsigned int axis, uvec3 res, BoundingBox box) -> unsigned {
+		return static_cast<unsigned>((depth - box.lower[axis]) / (box.upper[axis] - box.lower[axis]) * (res[axis] - 1));
+	}
+
+	constexpr std::array<std::array<unsigned int, 2>, 12> edgeToPointIds = {{
+		{{0, 1}},
+		{{2, 3}},
+		{{4, 5}},
+		{{6, 7}},
+		{{0, 2}},
+		{{1, 3}},
+		{{4, 6}},
+		{{5, 7}},
+		{{0, 4}},
+		{{1, 5}},
+		{{2, 6}},
+		{{3, 7}},
+	}};
+
+	constexpr auto edgeToAxis = []() constexpr {
+		std::array<std::array<unsigned int, 8>, 8> t{};
+		t[0][1] = t[1][0] = 0;
+		t[2][3] = t[3][2] = 0;
+		t[4][5] = t[5][4] = 0;
+		t[6][7] = t[7][6] = 0;
+		t[0][2] = t[2][0] = 1;
+		t[1][3] = t[3][1] = 1;
+		t[4][6] = t[6][4] = 1;
+		t[5][7] = t[7][5] = 1;
+		t[0][4] = t[4][0] = 2;
+		t[1][5] = t[5][1] = 2;
+		t[2][6] = t[6][2] = 2;
+		t[3][7] = t[7][3] = 2;
+		return t;
+	}();
+
+	auto clampSegments(std::vector<Segment> segments, float min, float max) {
+		for (auto& seg : segments) {
+			seg.start.depth = std::clamp(seg.start.depth, min, max);
+			seg.end.depth = std::clamp(seg.end.depth, min, max);
+		}
+
+		segments.erase(std::remove_if(begin(segments), end(segments), [](const Segment& seg) {
+			return seg.start.depth == seg.end.depth;
+		}), end(segments));
+
+		return segments;
+	}
+
 	class TriDexelGrid {
 	public:
 		TriDexelGrid(TriDexelImage& image, BoundingBox box)
@@ -132,7 +200,33 @@ namespace {
 			return occupancies[index.z * (r.x * r.y) + index.y * r.x + index.x];
 		}
 
-		auto cell(uvec3 index)->Cell;
+		auto cell(uvec3 index) -> Cell {
+			Cell c;
+			for (auto axis : {0, 1, 2}) {
+				c.box.lower[axis] = gridToDepth(index[axis] + 0, axis, image.resolution, box);
+				c.box.upper[axis] = gridToDepth(index[axis] + 1, axis, image.resolution, box);
+			}
+
+			c.occupancies[0] = occupancy(index + uvec3{0, 0, 0});
+			c.occupancies[1] = occupancy(index + uvec3{1, 0, 0});
+			c.occupancies[2] = occupancy(index + uvec3{0, 1, 0});
+			c.occupancies[3] = occupancy(index + uvec3{1, 1, 0});
+			c.occupancies[4] = occupancy(index + uvec3{0, 0, 1});
+			c.occupancies[5] = occupancy(index + uvec3{1, 0, 1});
+			c.occupancies[6] = occupancy(index + uvec3{0, 1, 1});
+			c.occupancies[7] = occupancy(index + uvec3{1, 1, 1});
+
+			for (auto i = 0; i < 12; i++) {
+				const auto [src, dst] = edgeToPointIds[i];
+				const auto axis0 = edgeToAxis[src][dst];
+				const auto axis1 = (axis0 + 1) % 3;
+				const auto axis2 = (axis0 + 2) % 3;
+				const auto edgeIndex = index + edgeIndexOffsets[i];
+				c.edges[i] = clampSegments(image.images[axis0].dexel(edgeIndex[axis1], edgeIndex[axis2]).segments(), c.box.lower[axis0], c.box.upper[axis0]);
+			}
+
+			return c;
+		}
 
 		TriDexelImage& image;
 		BoundingBox box;
@@ -176,14 +270,6 @@ namespace {
 		}
 	}
 
-	auto depthToGrid(float depth, unsigned int axis, uvec3 res, BoundingBox box) -> unsigned {
-		return static_cast<unsigned>((depth - box.lower[axis]) / (box.upper[axis] - box.lower[axis]) * (res[axis] - 1));
-	}
-
-	auto gridToDepth(unsigned int coord, unsigned int axis, uvec3 res, BoundingBox box) -> float {
-		return (coord / (float)(res[axis] - 1)) * (box.upper[axis] - box.lower[axis]) + box.lower[axis];
-	}
-
 	void assignOccupancies(TriDexelGrid& grid) {
 		for (auto& image : grid.image.images) {
 			const auto axis0 = image.axis0;
@@ -211,21 +297,6 @@ namespace {
 			}
 		}
 	}
-
-	constexpr std::array<std::array<unsigned int, 2>, 12> edgeToPointIds = {{
-		{{0, 1}},
-		{{2, 3}},
-		{{4, 5}},
-		{{6, 7}},
-		{{0, 2}},
-		{{1, 3}},
-		{{4, 6}},
-		{{5, 7}},
-		{{0, 4}},
-		{{1, 5}},
-		{{2, 6}},
-		{{3, 7}},
-	}};
 
 	constexpr auto rho = 1e-1f;
 
@@ -299,23 +370,6 @@ namespace {
 		vec3 position;
 		vec3 normal;
 	};
-
-	constexpr auto edgeToAxis = []() constexpr {
-		std::array<std::array<unsigned int, 8>, 8> t{};
-		t[0][1] = t[1][0] = 0;
-		t[2][3] = t[3][2] = 0;
-		t[4][5] = t[5][4] = 0;
-		t[6][7] = t[7][6] = 0;
-		t[0][2] = t[2][0] = 1;
-		t[1][3] = t[3][1] = 1;
-		t[4][6] = t[6][4] = 1;
-		t[5][7] = t[7][5] = 1;
-		t[0][4] = t[4][0] = 2;
-		t[1][5] = t[5][1] = 2;
-		t[2][6] = t[6][2] = 2;
-		t[3][7] = t[7][3] = 2;
-		return t;
-	}();
 
 	const auto pointsToEdgeId = []() {
 		std::array<std::array<unsigned int, 8>, 8> t{};
@@ -553,62 +607,6 @@ namespace {
 			loops = reverseLoops(findLoops(cell, true));
 		for (const auto& loop : loops)
 			triangulateLoopRefined(loop, cell, triangles);
-	}
-
-	auto clampSegments(std::vector<Segment> segments, float min, float max) {
-		for (auto& seg : segments) {
-			seg.start.depth = std::clamp(seg.start.depth, min, max);
-			seg.end.depth = std::clamp(seg.end.depth, min, max);
-		}
-
-		segments.erase(std::remove_if(begin(segments), end(segments), [](const Segment& seg) {
-			return seg.start.depth == seg.end.depth;
-			}), end(segments));
-
-		return segments;
-	}
-
-	const auto edgeIndexOffsets = std::array<uvec3, 12>{ {
-		{0, 0, 0},
-		{0, 1, 0},
-		{0, 0, 1},
-		{0, 1, 1},
-		{0, 0, 0},
-		{1, 0, 0},
-		{0, 0, 1},
-		{1, 0, 1},
-		{0, 0, 0},
-		{1, 0, 0},
-		{0, 1, 0},
-		{1, 1, 0}
-		}};
-
-	auto TriDexelGrid::cell(uvec3 index) -> Cell {
-		Cell c;
-		for (auto axis : {0, 1, 2}) {
-			c.box.lower[axis] = gridToDepth(index[axis] + 0, axis, image.resolution, box);
-			c.box.upper[axis] = gridToDepth(index[axis] + 1, axis, image.resolution, box);
-		}
-
-		c.occupancies[0] = occupancy(index + uvec3{0, 0, 0});
-		c.occupancies[1] = occupancy(index + uvec3{1, 0, 0});
-		c.occupancies[2] = occupancy(index + uvec3{0, 1, 0});
-		c.occupancies[3] = occupancy(index + uvec3{1, 1, 0});
-		c.occupancies[4] = occupancy(index + uvec3{0, 0, 1});
-		c.occupancies[5] = occupancy(index + uvec3{1, 0, 1});
-		c.occupancies[6] = occupancy(index + uvec3{0, 1, 1});
-		c.occupancies[7] = occupancy(index + uvec3{1, 1, 1});
-
-		for (auto i = 0; i < 12; i++) {
-			const auto [src, dst] = edgeToPointIds[i];
-			const auto axis0 = edgeToAxis[src][dst];
-			const auto axis1 = (axis0 + 1) % 3;
-			const auto axis2 = (axis0 + 2) % 3;
-			const auto edgeIndex = index + edgeIndexOffsets[i];
-			c.edges[i] = clampSegments(image.images[axis0].dexel(edgeIndex[axis1], edgeIndex[axis2]).segments(), c.box.lower[axis0], c.box.upper[axis0]);
-		}
-
-		return c;
 	}
 
 	void dumpDexels(const TriDexelGrid& grid, std::filesystem::path path) {
