@@ -9,7 +9,7 @@
 
 namespace {
 	struct Sphere {
-		vec3 center;
+		glm::vec3 center;
 		float radius;
 	};
 
@@ -25,30 +25,40 @@ namespace {
 		const auto x2 = (-b + std::sqrt(discriminat)) / 2 * a;
 		return { x1, x2 };
 	}
+
+	void extractSphere(int resolution) {
+		const auto sphere = Sphere{glm::vec3{0, 0, 0}, 5};
+		const auto box = BoundingBox{sphere.center - sphere.radius, sphere.center + sphere.radius};
+		const auto triangles = tridexel(box, resolution, [&](Ray ray, HitCallback hc) {
+			// from https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
+			// solve quadratic equation
+			const auto L = ray.origin - sphere.center;
+			const auto a = 1.0;
+			const auto b = 2 * glm::dot(ray.direction, L);
+			const auto c = glm::dot(L, L) - std::pow(sphere.radius, 2);
+			const auto solutions = solveQuadraticEquation(a, b, c);
+			for (const auto& t : solutions) {
+				const auto point = ray.origin + (float)t * ray.direction;
+				const auto normal = glm::normalize(point - sphere.center);
+				hc(glm::dot(ray.origin, ray.direction) + (float)t, normal);
+			}
+		});
+		saveTriangles("sphere" + std::to_string(resolution) + ".stl", triangles);
+	}
 }
 
-TEST(sphere, extract) {
-	const auto sphere = Sphere{ vec3{0, 0, 0}, 5 };
-	const auto box = BoundingBox{ sphere.center - sphere.radius, sphere.center + sphere.radius };
+TEST(sphere, extract5) {
+	extractSphere(5);
+}
 
-	//std::vector<vec3> hits;
+TEST(sphere, extract10) {
+	extractSphere(10);
+}
 
-	const auto triangles = tridexel(box, 200, [&](Ray ray, HitCallback hc) {
-		// from https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
-		// solve quadratic equation
-		const auto L = ray.origin - sphere.center;
-		const auto a = 1.0;
-		const auto b = 2 * glm::dot(ray.direction, L);
-		const auto c = glm::dot(L, L) - std::pow(sphere.radius, 2);
-		const auto solutions = solveQuadraticEquation(a, b, c);
-		for (const auto& t : solutions) {
-			const auto point = ray.origin + (float)t * ray.direction;
-			//hits.push_back(point);
-			const auto normal = glm::normalize(point - sphere.center);
-			hc(glm::dot(ray.origin, ray.direction) + (float)t, normal);
-		}
-	});
+TEST(sphere, extract100) {
+	extractSphere(100);
+}
 
-	//savePoints("hits.ply", hits);
-	saveTriangles("sphere.stl", triangles);
+TEST(sphere, extract200) {
+	extractSphere(200);
 }
